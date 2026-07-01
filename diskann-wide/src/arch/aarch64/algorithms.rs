@@ -49,39 +49,18 @@ pub fn squared_euclidean_accum_u8x16(x: u8x16, y: u8x16, acc: u32x8) -> u32x8 {
             let y = y.to_underlying();
             let (acc_lo, acc_hi) = acc.to_underlying();
 
-            // The algorithm works like this:
-            //
-            // * `vsubl[_high]_u8` performs subtraction and widens to `u16`
-            //
-            // * We reinterpret from `u16` to `s16`, which is valid because all `u8` values
-            //   can be represented as an `i16`, and the subtraction is wrapping, so negative
-            //   values are represented properly.
-            //
-            // * Then, we use `vmlal_s16` to square the results and accumulate. All of this
-            //   needs to be done in the signed space so that negative values get properly
-            //   sign extended and thus behave correctly.
-            //
-            // * At the end, we can reinterpret back. Since multiplication and addition are
-            //   the same for signed and unsigned numbers (once sign-extension is accounted
-            //   for), the final result is correct.
-            let lo = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(x), vget_low_u8(y)));
-            let hi = vreinterpretq_s16_u16(vsubl_high_u8(x, y));
+            // Compute widened absolute differences first, then square and accumulate
+            // in unsigned space. This avoids the signed reinterpret path.
+            let lo = vabdl_u8(vget_low_u8(x), vget_low_u8(y));
+            let hi = vabdl_high_u8(x, y);
 
-            let acc_lo = vmlal_s16(
-                vreinterpretq_s32_u32(acc_lo),
-                vget_low_s16(lo),
-                vget_low_s16(lo),
-            );
-            let acc_hi = vmlal_s16(
-                vreinterpretq_s32_u32(acc_hi),
-                vget_low_s16(hi),
-                vget_low_s16(hi),
-            );
+            let acc_lo = vmlal_u16(acc_lo, vget_low_u16(lo), vget_low_u16(lo));
+            let acc_hi = vmlal_u16(acc_hi, vget_low_u16(hi), vget_low_u16(hi));
 
-            let acc_lo = vmlal_high_s16(acc_lo, lo, lo);
-            let acc_hi = vmlal_high_s16(acc_hi, hi, hi);
+            let acc_lo = vmlal_high_u16(acc_lo, lo, lo);
+            let acc_hi = vmlal_high_u16(acc_hi, hi, hi);
 
-            (vreinterpretq_u32_s32(acc_lo), vreinterpretq_u32_s32(acc_hi))
+            (acc_lo, acc_hi)
         };
 
         u32x8::from_underlying(arch, (lo, hi))
@@ -128,10 +107,11 @@ pub fn squared_euclidean_accum_i8x16(x: i8x16, y: i8x16, acc: i32x8) -> i32x8 {
             let y = y.to_underlying();
             let (acc_lo, acc_hi) = acc.to_underlying();
 
-            // This uses an approach similar to `u8x16`, but since everything is already
-            // signed, we can avoid the pesky reinterprets.
-            let lo = vsubl_s8(vget_low_s8(x), vget_low_s8(y));
-            let hi = vsubl_high_s8(x, y);
+            // Compute widened absolute differences first, then square and accumulate.
+            // Squaring `|x - y|` is equivalent to squaring `(x - y)`, but this avoids
+            // signed subtraction bookkeeping in the SIMD path.
+            let lo = vabdl_s8(vget_low_s8(x), vget_low_s8(y));
+            let hi = vabdl_high_s8(x, y);
 
             let acc_lo = vmlal_s16(acc_lo, vget_low_s16(lo), vget_low_s16(lo));
             let acc_hi = vmlal_s16(acc_hi, vget_low_s16(hi), vget_low_s16(hi));
