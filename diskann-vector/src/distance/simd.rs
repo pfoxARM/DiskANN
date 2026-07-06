@@ -16,6 +16,9 @@ use diskann_wide::{
 
 use crate::{AsUnaligned, Half};
 
+#[cfg(target_arch = "aarch64")]
+const NEON_INTEGER_TAIL_SIMD_CROSSOVER: usize = 10;
+
 /// A helper trait to allow integer to f32 conversion (which may be lossy).
 pub trait LossyF32Conversion: Copy {
     fn as_f32_lossy(self) -> f32;
@@ -1248,6 +1251,34 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
         algorithms::squared_euclidean_accum_i8x16(x, y, acc)
     }
 
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const i8,
+        y: *const i8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        if len < NEON_INTEGER_TAIL_SIMD_CROSSOVER {
+            let scalar = scalar_epilogue(
+                x,
+                y,
+                len.min(Self::SIMDWidth::value() - 1),
+                0i32,
+                |acc, x: i8, y: i8| -> i32 {
+                    let d = (x as i32) - (y as i32);
+                    acc + d * d
+                },
+            );
+            acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        } else {
+            let a = Self::Left::load_simd_first(arch, x, len);
+            let b = Self::Right::load_simd_first(arch, y, len);
+            <Self as SIMDSchema<i8, i8, Neon>>::accumulate(self, a, b, acc)
+        }
+    }
+
     // Perform a final reduction.
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
@@ -1402,6 +1433,34 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
         algorithms::squared_euclidean_accum_u8x16(x, y, acc)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const u8,
+        y: *const u8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        if len < NEON_INTEGER_TAIL_SIMD_CROSSOVER {
+            let scalar = scalar_epilogue(
+                x,
+                y,
+                len.min(Self::SIMDWidth::value() - 1),
+                0u32,
+                |acc, x: u8, y: u8| -> u32 {
+                    let d = (x as i32) - (y as i32);
+                    acc + (d * d) as u32
+                },
+            );
+            acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        } else {
+            let a = Self::Left::load_simd_first(arch, x, len);
+            let b = Self::Right::load_simd_first(arch, y, len);
+            <Self as SIMDSchema<u8, u8, Neon>>::accumulate(self, a, b, acc)
+        }
     }
 
     // Perform a final reduction.
@@ -1959,6 +2018,31 @@ impl SIMDSchema<i8, i8, Neon> for IP {
     }
 
     #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const i8,
+        y: *const i8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        if len < NEON_INTEGER_TAIL_SIMD_CROSSOVER {
+            let scalar = scalar_epilogue(
+                x,
+                y,
+                len.min(Self::SIMDWidth::value() - 1),
+                0i32,
+                |acc, x: i8, y: i8| -> i32 { acc + (x as i32) * (y as i32) },
+            );
+            acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
+        } else {
+            let a = Self::Left::load_simd_first(arch, x, len);
+            let b = Self::Right::load_simd_first(arch, y, len);
+            <Self as SIMDSchema<i8, i8, Neon>>::accumulate(self, a, b, acc)
+        }
+    }
+
+    #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
         x.sum_tree().as_f32_lossy()
     }
@@ -2101,6 +2185,31 @@ impl SIMDSchema<u8, u8, Neon> for IP {
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
         acc.dot_simd(x, y)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const u8,
+        y: *const u8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        if len < NEON_INTEGER_TAIL_SIMD_CROSSOVER {
+            let scalar = scalar_epilogue(
+                x,
+                y,
+                len.min(Self::SIMDWidth::value() - 1),
+                0u32,
+                |acc, x: u8, y: u8| -> u32 { acc + (x as u32) * (y as u32) },
+            );
+            acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
+        } else {
+            let a = Self::Left::load_simd_first(arch, x, len);
+            let b = Self::Right::load_simd_first(arch, y, len);
+            <Self as SIMDSchema<u8, u8, Neon>>::accumulate(self, a, b, acc)
+        }
     }
 
     #[inline(always)]
