@@ -101,7 +101,7 @@ cfg_if::cfg_if! {
             // terms, and this function is only compiled on aarch64.
             unsafe {
                 asm!(
-                    "prfm pldl1keep, [{ptr}]",
+                    "prfm pldl2keep, [{ptr}]",
                     ptr = in(reg) ptr,
                     options(nostack, preserves_flags),
                 );

@@ -210,7 +210,7 @@ pub(crate) unsafe fn prefetch(ptr: *const u8, len: usize) {
         // SAFETY: `prfm` is a non-faulting prefetch hint and does not create Rust references.
         unsafe {
             std::arch::asm!(
-                "prfm pldl1keep, [{ptr}]",
+                "prfm pldl2keep, [{ptr}]",
                 ptr = in(reg) ptr,
                 options(nostack, preserves_flags),
             );
