@@ -8,6 +8,7 @@ use std::{
     marker::PhantomData,
 };
 
+#[cfg(target_arch = "x86_64")]
 use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
 use super::Neighbor;
@@ -226,6 +227,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Get the lower bound of the neighbor - the index of the first neighbor
     /// that has a distance greater than or equal to the target neighbor
     /// PERFORMANCE: This function is performance critical - please benchmark any changes
+    #[cfg(target_arch = "x86_64")]
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
         diskann_wide::alias!(f32s = f32x8);
         let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
@@ -277,6 +279,15 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
 
         self.size
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
+        if nbr.distance.is_nan() {
+            return self.size;
+        }
+
+        self.distances[..self.size].partition_point(|&distance| distance < nbr.distance)
     }
 
     /// Get the neighbor at index - SAFETY: index must be less than size
