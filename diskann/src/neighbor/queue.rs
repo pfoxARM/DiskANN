@@ -287,7 +287,21 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             return self.size;
         }
 
-        self.distances[..self.size].partition_point(|&distance| distance < nbr.distance)
+        let distances = &self.distances[..self.size];
+        // Scan at most four chunks before searching the remaining sorted tail.
+        let prefix_len = distances.len().min(16) / 4 * 4;
+
+        for (chunk_index, chunk) in distances[..prefix_len].chunks_exact(4).enumerate() {
+            if chunk[3] >= nbr.distance {
+                // The last value is already known to be at or above the target.
+                let offset = (chunk[0] < nbr.distance) as usize
+                    + (chunk[1] < nbr.distance) as usize
+                    + (chunk[2] < nbr.distance) as usize;
+                return chunk_index * 4 + offset;
+            }
+        }
+
+        prefix_len + distances[prefix_len..].partition_point(|&distance| distance < nbr.distance)
     }
 
     /// Get the neighbor at index - SAFETY: index must be less than size
