@@ -8,7 +8,7 @@ use std::{
     marker::PhantomData,
 };
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use diskann_wide::{SIMDMask, SIMDPartialOrd, SIMDVector};
 
 use super::Neighbor;
@@ -281,27 +281,58 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         self.size
     }
 
+    /// Get the lower bound of the neighbor - the index of the first neighbor
+    /// that has a distance greater than or equal to the target neighbor
+    /// PERFORMANCE: This function is performance critical - please benchmark any changes
     #[cfg(target_arch = "aarch64")]
     fn get_lower_bound(&mut self, nbr: &Neighbor<I>) -> usize {
-        if nbr.distance.is_nan() {
-            return self.size;
+        diskann_wide::alias!(f32s = f32x4);
+        let target = f32s::splat(diskann_wide::ARCH, nbr.distance);
+        let mut index = 0;
+
+        // Check 16 items at a time using two 128-bit Neon vectors.
+        while index + 16 <= self.size {
+            let search = unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
+            let offset1 = search.ge_simd(target).first();
+
+            let search = unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index + 8)) };
+            let offset2 = search.ge_simd(target).first();
+
+            match (offset1, offset2) {
+                (Some(offset), _) => return index + offset,
+                (None, Some(offset)) => return index + 8 + offset,
+                _ => (),
+            }
+
+            index += 16;
         }
 
-        let distances = &self.distances[..self.size];
-        // Scan at most four chunks before searching the remaining sorted tail.
-        let prefix_len = distances.len().min(16) / 4 * 4;
+        // Check any remaining complete Neon vectors.
+        while index + 4 <= self.size {
+            let search =
+                unsafe { f32s::load_simd(diskann_wide::ARCH, self.distances.as_ptr().add(index)) };
+            if let Some(offset) = search.ge_simd(target).first() {
+                return index + offset;
+            }
 
-        for (chunk_index, chunk) in distances[..prefix_len].chunks_exact(4).enumerate() {
-            if chunk[3] >= nbr.distance {
-                // The last value is already known to be at or above the target.
-                let offset = (chunk[0] < nbr.distance) as usize
-                    + (chunk[1] < nbr.distance) as usize
-                    + (chunk[2] < nbr.distance) as usize;
-                return chunk_index * 4 + offset;
+            index += 4;
+        }
+
+        // Load the final one to three values without reading past the slice.
+        if index < self.size {
+            let search = unsafe {
+                f32s::load_simd_first(
+                    diskann_wide::ARCH,
+                    self.distances.as_ptr().add(index),
+                    self.size - index,
+                )
+            };
+            if let Some(offset) = search.ge_simd(target).first() {
+                return index + offset;
             }
         }
 
-        prefix_len + distances[prefix_len..].partition_point(|&distance| distance < nbr.distance)
+        self.size
     }
 
     /// Get the neighbor at index - SAFETY: index must be less than size
